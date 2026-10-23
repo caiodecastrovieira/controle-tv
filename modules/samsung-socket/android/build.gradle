@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.samsungsocket'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.samsungsocket"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // OkHttp já vem com o React Native; declarado aqui para compilar o módulo.
+  implementation "com.squareup.okhttp3:okhttp:4.9.2"
+}
