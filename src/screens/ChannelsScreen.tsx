@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +14,15 @@ import {
   View,
 } from 'react-native';
 import { loadChannels, saveChannels, type Channel } from '../lib/storage';
-import { fetchRecentVideos, resolveChannel, thumb, type Video } from '../lib/youtube';
+import {
+  fetchRecentVideos,
+  looksLikeChannelRef,
+  resolveChannel,
+  searchChannels,
+  thumb,
+  type ChannelResult,
+  type Video,
+} from '../lib/youtube';
 import { loadScreen, pairViaDial, pairWithCode, playVideo, saveScreen, type Screen } from '../lib/lounge';
 import { Sheet } from '../components/Sheet';
 import { tv, useTV } from '../tv/SamsungTV';
@@ -24,9 +32,12 @@ export function ChannelsScreen() {
   const { status } = useTV();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [input, setInput] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<ChannelResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
+  const [open, setOpen] = useState<Channel | null>(null);
+  const searchId = useRef(0);
+
   useEffect(() => {
     loadChannels().then(setChannels);
   }, []);
@@ -36,26 +47,51 @@ export function ChannelsScreen() {
     saveChannels(list);
   };
 
-  const add = async () => {
-    if (!input.trim() || adding) return;
-    setAdding(true);
+  const runSearch = async (q: string) => {
+    const query = q.trim();
+    const my = ++searchId.current;
+    if (!query) {
+      setResults(null);
+      setBusy(false);
+      return;
+    }
+    setBusy(true);
     setError(null);
     try {
-      const ch = await resolveChannel(input);
-      if (channels.some((x) => x.id === ch.id)) {
-        setError(`${ch.title} já está na lista.`);
+      if (looksLikeChannelRef(query)) {
+        const ch = await resolveChannel(query);
+        if (my === searchId.current) setResults([{ id: ch.id, title: ch.title, avatar: ch.avatar }]);
       } else {
-        update([ch, ...channels]);
-        setInput('');
+        const list = await searchChannels(query);
+        if (my !== searchId.current) return;
+        setResults(list);
+        if (!list.length) setError('Nenhum canal encontrado.');
       }
     } catch (e: any) {
-      setError(e.message ?? 'Não consegui adicionar esse canal.');
+      if (my === searchId.current) setError(e.message ?? 'A busca falhou.');
     } finally {
-      setAdding(false);
+      if (my === searchId.current) setBusy(false);
     }
   };
 
-  const [open, setOpen] = useState<Channel | null>(null);
+  // Busca enquanto digita, com uma pequena pausa.
+  useEffect(() => {
+    const t = setTimeout(() => runSearch(input), 450);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input]);
+
+  const add = (r: ChannelResult) => {
+    if (channels.some((x) => x.id === r.id)) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    update([{ id: r.id, title: r.title, avatar: r.avatar, addedAt: Date.now() }, ...channels]);
+  };
+
+  const clear = () => {
+    setInput('');
+    setResults(null);
+    setError(null);
+  };
 
   const play = (ch: Channel) => {
     if (status !== 'connected') {
@@ -81,79 +117,115 @@ export function ChannelsScreen() {
     update(next);
   };
 
+  const searching = input.trim().length > 0;
+
   return (
     <>
-    <FlatList
-      data={channels}
-      keyExtractor={(ch) => ch.id}
-      contentContainerStyle={styles.wrap}
-      keyboardShouldPersistTaps="handled"
-      ListHeaderComponent={
-        <View style={{ gap: 10, marginBottom: 6 }}>
-          <View style={styles.addRow}>
-            <TextInput
-              value={input}
-              onChangeText={setInput}
-              onSubmitEditing={add}
-              placeholder="@canal ou link do YouTube"
-              placeholderTextColor={c.faint}
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="done"
-              style={styles.input}
-            />
-            <Pressable
-              onPress={add}
-              style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
-              accessibilityLabel="Adicionar canal"
-            >
-              {adding ? <ActivityIndicator color={c.accentInk} /> : <Ionicons name="add" size={26} color={c.accentInk} />}
-            </Pressable>
+      <FlatList
+        data={searching ? [] : channels}
+        keyExtractor={(ch) => ch.id}
+        contentContainerStyle={styles.wrap}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+          <View style={{ gap: 10, marginBottom: 6 }}>
+            <View style={styles.search}>
+              <Ionicons name="search" size={20} color={c.muted} />
+              <TextInput
+                value={input}
+                onChangeText={setInput}
+                onSubmitEditing={() => runSearch(input)}
+                placeholder="Buscar canal"
+                placeholderTextColor={c.faint}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="search"
+                style={styles.searchInput}
+              />
+              {busy ? (
+                <ActivityIndicator color={c.muted} />
+              ) : searching ? (
+                <Pressable onPress={clear} hitSlop={10} accessibilityLabel="Limpar busca">
+                  <Ionicons name="close-circle" size={20} color={c.muted} />
+                </Pressable>
+              ) : null}
+            </View>
+            {error && <Text style={styles.error}>{error}</Text>}
+
+            {searching &&
+              results?.map((r) => {
+                const added = channels.some((x) => x.id === r.id);
+                return (
+                  <Pressable
+                    key={r.id}
+                    onPress={() => add(r)}
+                    disabled={added}
+                    style={({ pressed }) => [styles.card, pressed && { backgroundColor: c.surfaceHi }]}
+                  >
+                    {r.avatar ? (
+                      <Image source={{ uri: r.avatar }} style={styles.avatar} />
+                    ) : (
+                      <View style={[styles.avatar, { backgroundColor: c.surfaceHi }]} />
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.title} numberOfLines={1}>
+                        {r.title}
+                      </Text>
+                      {r.info && (
+                        <Text style={styles.videoMeta} numberOfLines={1}>
+                          {r.info}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={[styles.playBtn, added && { backgroundColor: 'transparent' }]}>
+                      <Ionicons name={added ? 'checkmark' : 'add'} size={22} color={added ? c.muted : c.accent} />
+                    </View>
+                  </Pressable>
+                );
+              })}
+
+            {!searching && channels.length > 0 && (
+              <Text style={styles.tip}>Toque para ver os vídeos recentes. Segure para remover.</Text>
+            )}
           </View>
-          {error && <Text style={styles.error}>{error}</Text>}
-          {channels.length > 0 && (
-            <Text style={styles.tip}>Toque para ver os vídeos recentes. Segure para remover.</Text>
-          )}
-        </View>
-      }
-      ListEmptyComponent={
-        <View style={styles.empty}>
-          <Ionicons name="logo-youtube" size={40} color={c.faint} />
-          <Text style={styles.emptyTitle}>Seus canais favoritos aqui</Text>
-          <Text style={styles.emptyText}>
-            Cole o link de um canal, um @ (como @canal) ou até o link de um vídeo. O app descobre o canal sozinho.
-          </Text>
-        </View>
-      }
-      ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-      renderItem={({ item, index }) => (
-        <Pressable
-          onPress={() => play(item)}
-          onLongPress={() => remove(item)}
-          style={({ pressed }) => [styles.card, pressed && { backgroundColor: c.surfaceHi }]}
-        >
-          {item.avatar ? (
-            <Image source={{ uri: item.avatar }} style={styles.avatar} />
-          ) : (
-            <View style={[styles.avatar, { backgroundColor: c.surfaceHi }]} />
-          )}
-          <Text style={styles.title} numberOfLines={1}>
-            {item.title}
-          </Text>
-          {index > 0 && (
-            <Pressable onPress={() => moveUp(item)} hitSlop={10} accessibilityLabel="Subir na lista">
-              <Ionicons name="arrow-up" size={18} color={c.faint} />
-            </Pressable>
-          )}
-          <View style={styles.playBtn}>
-            <Ionicons name="play" size={18} color={c.accent} />
-          </View>
-        </Pressable>
-      )}
-    />
-    <Sheet visible={!!open} onClose={() => setOpen(null)} title={open?.title ?? ''}>
-      {open && <VideoList channel={open} onDone={() => setOpen(null)} />}
-    </Sheet>
+        }
+        ListEmptyComponent={
+          searching ? undefined : (
+            <View style={styles.empty}>
+              <Ionicons name="logo-youtube" size={40} color={c.faint} />
+              <Text style={styles.emptyTitle}>Seus canais favoritos aqui</Text>
+              <Text style={styles.emptyText}>Busque pelo nome do canal e toque no + para adicionar.</Text>
+            </View>
+          )
+        }
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        renderItem={({ item, index }) => (
+          <Pressable
+            onPress={() => play(item)}
+            onLongPress={() => remove(item)}
+            style={({ pressed }) => [styles.card, pressed && { backgroundColor: c.surfaceHi }]}
+          >
+            {item.avatar ? (
+              <Image source={{ uri: item.avatar }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, { backgroundColor: c.surfaceHi }]} />
+            )}
+            <Text style={[styles.title, { flex: 1 }]} numberOfLines={1}>
+              {item.title}
+            </Text>
+            {index > 0 && (
+              <Pressable onPress={() => moveUp(item)} hitSlop={10} accessibilityLabel="Subir na lista">
+                <Ionicons name="arrow-up" size={18} color={c.faint} />
+              </Pressable>
+            )}
+            <View style={styles.playBtn}>
+              <Ionicons name="play" size={18} color={c.accent} />
+            </View>
+          </Pressable>
+        )}
+      />
+      <Sheet visible={!!open} onClose={() => setOpen(null)} title={open?.title ?? ''}>
+        {open && <VideoList channel={open} onDone={() => setOpen(null)} />}
+      </Sheet>
     </>
   );
 }
@@ -397,7 +469,19 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   avatar: { width: 48, height: 48, borderRadius: 24 },
-  title: { color: c.text, fontSize: 16, fontWeight: '600', flex: 1 },
+  title: { color: c.text, fontSize: 16, fontWeight: '600' },
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: c.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: c.border,
+    paddingHorizontal: 14,
+    height: 54,
+  },
+  searchInput: { flex: 1, color: c.text, fontSize: 16, height: '100%' },
   video: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   thumb: { width: 140, height: 79, borderRadius: 10, backgroundColor: c.surfaceHi },
   thumbOverlay: {

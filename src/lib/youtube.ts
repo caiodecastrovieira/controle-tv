@@ -95,3 +95,46 @@ export async function fetchRecentVideos(channelId: string): Promise<Video[]> {
 }
 
 export const thumb = (videoId: string) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+
+export type ChannelResult = { id: string; title: string; avatar?: string; info?: string };
+
+/** Busca canais por nome, como a busca do YouTube (filtro "Canais"). */
+export async function searchChannels(query: string): Promise<ChannelResult[]> {
+  const res = await fetch('https://www.youtube.com/youtubei/v1/search?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': UA, 'Accept-Language': 'pt-BR,pt;q=0.9' },
+    body: JSON.stringify({
+      context: { client: { clientName: 'WEB', clientVersion: '2.20250101.00.00', hl: 'pt', gl: 'BR' } },
+      query,
+      params: 'EgIQAg==', // filtro: só canais
+    }),
+  });
+  if (!res.ok) throw new Error(`A busca falhou (${res.status}).`);
+  const json = await res.json();
+
+  // Procura todos os "channelRenderer" na resposta, onde quer que estejam.
+  const found: any[] = [];
+  const walk = (node: any) => {
+    if (!node || typeof node !== 'object') return;
+    if (node.channelRenderer) found.push(node.channelRenderer);
+    for (const k in node) walk(node[k]);
+  };
+  walk(json);
+
+  const text = (t: any): string | undefined =>
+    t?.simpleText ?? t?.runs?.map((r: any) => r.text).join('') ?? undefined;
+
+  return found
+    .filter((r) => r.channelId)
+    .map((r) => {
+      const thumbs = r.thumbnail?.thumbnails ?? [];
+      let avatar: string | undefined = thumbs[thumbs.length - 1]?.url;
+      if (avatar?.startsWith('//')) avatar = `https:${avatar}`;
+      const info = [text(r.subscriberCountText), text(r.videoCountText)].filter(Boolean).join(' · ');
+      return { id: r.channelId, title: text(r.title) ?? 'Canal', avatar, info: info || undefined };
+    });
+}
+
+/** O texto parece link, @ ou ID de canal (em vez de um nome para buscar)? */
+export const looksLikeChannelRef = (s: string) =>
+  /^@|youtube\.com|youtu\.be|^UC[\w-]{22}$/.test(s.trim());
