@@ -319,7 +319,9 @@ function VideoList({ channel, onDone }: { channel: Channel; onDone: () => void }
             <Text style={styles.videoTitle} numberOfLines={3}>
               {item.title}
             </Text>
-            {item.published && <Text style={styles.videoMeta}>{ago(item.published)}</Text>}
+            {(item.published || item.when) && (
+              <Text style={styles.videoMeta}>{item.published ? ago(item.published) : item.when}</Text>
+            )}
           </View>
         </Pressable>
       )}
