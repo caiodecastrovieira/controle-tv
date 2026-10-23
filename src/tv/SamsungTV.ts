@@ -34,6 +34,32 @@ const APP_CANDIDATES: Record<AppKey, string[]> = {
   youtube: ['111299001912', '9Ur5IzDKqV.TizenYouTube', '3201502001815'],
 };
 
+/** Apps populares e seus IDs conhecidos no Tizen. Usado quando a TV não informa a lista. */
+const APP_CATALOG: { name: string; ids: string[] }[] = [
+  { name: 'Netflix', ids: APP_CANDIDATES_NETFLIX() },
+  { name: 'YouTube', ids: ['111299001912', '9Ur5IzDKqV.TizenYouTube'] },
+  { name: 'Prime Video', ids: ['3201910019365', '3201512006785', 'org.tizen.ignition'] },
+  { name: 'Disney+', ids: ['3201901017640'] },
+  { name: 'Max', ids: ['3202301029760', '3201601007230'] },
+  { name: 'Globoplay', ids: ['3201908019041', '3201807016564', '3201609010734'] },
+  { name: 'Apple TV', ids: ['3201807016597'] },
+  { name: 'Paramount+', ids: ['3201710014981'] },
+  { name: 'Pluto TV', ids: ['3201808016802'] },
+  { name: 'Spotify', ids: ['3201606009684'] },
+  { name: 'Deezer', ids: ['3201608010191'] },
+  { name: 'YouTube Kids', ids: ['3201611010983'] },
+  { name: 'Crunchyroll', ids: ['3201807016566'] },
+  { name: 'Twitch', ids: ['3202203026841'] },
+  { name: 'Plex', ids: ['3201512006963'] },
+  { name: 'Tubi', ids: ['3201504001965'] },
+  { name: 'Steam Link', ids: ['3201702011851'] },
+  { name: 'Navegador', ids: ['org.tizen.browser', '3201907018784'] },
+];
+
+function APP_CANDIDATES_NETFLIX() {
+  return ['3201907018807', '11101200001', 'RN1MCdNq8t.Netflix'];
+}
+
 /** Como o app aparece na lista de instalados da TV. */
 const APP_NAMES: Record<AppKey, RegExp> = {
   netflix: /^netflix$/i,
@@ -282,7 +308,7 @@ class SamsungTV {
 
     // 1. Pela lista de apps instalados (mais confiável).
     try {
-      const apps = await this.getInstalledApps();
+      const apps = await this.askInstalledApps();
       const hit = apps.find((a) => APP_NAMES[key].test(a.name.trim()));
       if (hit) return (this.resolvedApps[key] = hit.appId);
     } catch {}
@@ -318,7 +344,17 @@ class SamsungTV {
   }
 
 
-  getInstalledApps(): Promise<InstalledApp[]> {
+  /** Lista de apps: pergunta à TV e, se ela não responder, testa os apps mais comuns. */
+  async getInstalledApps(): Promise<InstalledApp[]> {
+    if (this.state.status !== 'connected') throw new Error('Conecte a TV primeiro.');
+    try {
+      const apps = await this.askInstalledApps();
+      if (apps.length) return apps;
+    } catch {}
+    return this.probeCatalog();
+  }
+
+  private askInstalledApps(): Promise<InstalledApp[]> {
     return new Promise((resolve, reject) => {
       const ok = this.send({
         method: 'ms.channel.emit',
@@ -327,14 +363,37 @@ class SamsungTV {
       if (!ok) return reject(new Error('TV desconectada'));
       const timer = setTimeout(() => {
         this.appsWaiter = undefined;
-        reject(new Error('A TV não respondeu a lista de apps'));
-      }, 5000);
+        reject(new Error('sem resposta'));
+      }, 3000);
       this.appsWaiter = (apps) => {
         clearTimeout(timer);
         resolve(apps);
       };
     });
   }
+
+  private probeCatalog(): Promise<InstalledApp[]> {
+    const { ip } = this.state;
+    return Promise.all(
+      APP_CATALOG.map(async (entry) => {
+        for (const id of entry.ids) {
+          try {
+            const res = await fetchWithTimeout(`http://${ip}:8001/api/v2/applications/${id}`, 2500);
+            if (!res.ok) continue;
+            const info = await res.json().catch(() => ({}));
+            return { appId: id, name: (info?.name as string) || entry.name } as InstalledApp;
+          } catch {}
+        }
+        return null;
+      }),
+    ).then((list) => {
+      const found = list.filter((a): a is InstalledApp => !!a);
+      // A TV não deixou consultar nada: mostra o catálogo inteiro e tenta abrir assim mesmo.
+      if (!found.length) return APP_CATALOG.map((e) => ({ appId: e.ids[0], name: e.name }));
+      return found;
+    });
+  }
+
 
   private youtubeOpenedAt = 0;
 
