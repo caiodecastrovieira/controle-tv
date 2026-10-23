@@ -272,55 +272,17 @@ class SamsungTV {
     });
   }
 
-  /**
-   * EXPERIMENTAL: abrir a página de um canal no YouTube da TV.
-   * Não há formato oficial. Cada número testa uma hipótese diferente.
-   */
-  async openYouTubeChannel(channelId: string, format: 1 | 2 | 3) {
-    const { ip } = this.state;
-    if (!ip) throw new Error('Nenhuma TV conectada');
-    if (format === 1) {
-      // DIAL com o parâmetro c=, como o vídeo usa v=
-      for (const port of [8080, 8001]) {
-        try {
-          const res = await fetchWithTimeout(`http://${ip}:${port}/ws/apps/YouTube`, 4000, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-            body: `c=${channelId}`,
-          });
-          if (res.status === 200 || res.status === 201) return;
-        } catch {}
-      }
-      throw new Error('A TV não aceitou o formato 1');
-    }
-    const meta =
-      format === 2 ? `#/browse?c=${channelId}` : `https://www.youtube.com/tv#/browse?c=${channelId}`;
-    if (!this.launchApp(APPS.youtube, meta)) throw new Error('TV desconectada');
-  }
+  private youtubeOpenedAt = 0;
 
   /**
-   * Abre um vídeo do YouTube na TV.
-   * Usa o protocolo DIAL, o mesmo do botão "transmitir" do app do YouTube.
-   * Samsung expõe o DIAL na porta 8080 (modelos mais novos também na 8001).
+   * Garante o YouTube aberto na TV antes de mandar um vídeo.
+   * Se o app não foi aberto por nós há pouco, abre e espera ele carregar.
    */
-  async playYouTube(videoId: string) {
-    const { ip } = this.state;
-    if (!ip) throw new Error('Nenhuma TV conectada');
-    const body = `v=${videoId}`;
-    for (const port of [8080, 8001]) {
-      try {
-        const res = await fetchWithTimeout(`http://${ip}:${port}/ws/apps/YouTube`, 4000, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-          body,
-        });
-        if (res.status === 200 || res.status === 201) return;
-      } catch {
-        // tenta a próxima porta
-      }
-    }
-    // Plano B: abre o app do YouTube pelo canal de controle, passando o vídeo.
-    if (!this.launchApp(APPS.youtube, body)) throw new Error('Não consegui abrir o YouTube na TV');
+  async ensureYouTubeOpen() {
+    if (Date.now() - this.youtubeOpenedAt < 10 * 60 * 1000) return;
+    if (!this.launchApp(APPS.youtube)) throw new Error('Conecte a TV primeiro.');
+    this.youtubeOpenedAt = Date.now();
+    await new Promise((r) => setTimeout(r, 6000));
   }
 }
 

@@ -7,6 +7,7 @@ import {
   FlatList,
   Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,6 +15,7 @@ import {
 } from 'react-native';
 import { loadChannels, saveChannels, type Channel } from '../lib/storage';
 import { fetchRecentVideos, resolveChannel, thumb, type Video } from '../lib/youtube';
+import { loadScreen, pairViaDial, pairWithCode, playVideo, saveScreen, type Screen } from '../lib/lounge';
 import { Sheet } from '../components/Sheet';
 import { tv, useTV } from '../tv/SamsungTV';
 import { c, radius } from '../theme';
@@ -157,20 +159,29 @@ export function ChannelsScreen() {
 }
 
 function VideoList({ channel, onDone }: { channel: Channel; onDone: () => void }) {
+  const { ip } = useTV();
   const [videos, setVideos] = useState<Video[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState<string | null>(null);
+  const [screen, setScreen] = useState<Screen | null | undefined>(undefined);
+  const [pending, setPending] = useState<Video | null>(null);
 
   useEffect(() => {
     fetchRecentVideos(channel.id).then(setVideos, (e) => setError(e.message));
+    loadScreen().then(setScreen);
   }, [channel.id]);
 
-  const send = async (v: Video) => {
+  const send = async (v: Video, scr = screen) => {
+    if (!scr) {
+      setPending(v);
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     setSending(v.id);
     setError(null);
     try {
-      await tv.playYouTube(v.id);
+      await tv.ensureYouTubeOpen();
+      setScreen(await playVideo(scr, v.id));
       onDone();
     } catch (e: any) {
       setError(e.message);
@@ -179,45 +190,48 @@ function VideoList({ channel, onDone }: { channel: Channel; onDone: () => void }
     }
   };
 
-  if (error && !videos) return <Text style={styles.error}>{error}</Text>;
-  if (!videos) return <ActivityIndicator color={c.accent} style={{ marginVertical: 32 }} />;
+  if (pending) {
+    return (
+      <LinkYouTube
+        ip={ip}
+        onLinked={(scr) => {
+          setScreen(scr);
+          const v = pending;
+          setPending(null);
+          if (v) send(v, scr);
+        }}
+        onCancel={() => setPending(null)}
+      />
+    );
+  }
 
-  const openChannel = async (format: 1 | 2 | 3) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    setError(null);
-    try {
-      await tv.openYouTubeChannel(channel.id, format);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
+  if (error && !videos) return <Text style={styles.error}>{error}</Text>;
+  if (!videos || screen === undefined) return <ActivityIndicator color={c.accent} style={{ marginVertical: 32 }} />;
 
   return (
     <FlatList
       data={videos}
       keyExtractor={(v) => v.id}
-      ListHeaderComponent={
-        <View style={{ gap: 10, marginBottom: 16 }}>
-          <Text style={styles.videoMeta}>Abrir a página do canal na TV (teste: qual formato funciona?)</Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {([1, 2, 3] as const).map((f) => (
-              <Pressable
-                key={f}
-                onPress={() => openChannel(f)}
-                style={({ pressed }) => [styles.formatBtn, pressed && { opacity: 0.7 }]}
-              >
-                <Text style={styles.formatText}>Formato {f}</Text>
-              </Pressable>
-            ))}
-          </View>
-          {error && <Text style={styles.error}>{error}</Text>}
-          <Text style={[styles.videoMeta, { marginTop: 6 }]}>Ou escolha um vídeo:</Text>
-        </View>
+      ListHeaderComponent={error ? <Text style={[styles.error, { marginBottom: 12 }]}>{error}</Text> : undefined}
+      ListFooterComponent={
+        screen ? (
+          <Pressable
+            onPress={() => {
+              saveScreen(null);
+              setScreen(null);
+            }}
+            hitSlop={10}
+            style={{ marginTop: 20, alignSelf: 'center' }}
+          >
+            <Text style={styles.tip}>Desvincular YouTube da TV</Text>
+          </Pressable>
+        ) : undefined
       }
       ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
       renderItem={({ item, index }) => (
         <Pressable
           onPress={() => send(item)}
+          disabled={!!sending}
           style={({ pressed }) => [styles.video, pressed && { opacity: 0.7 }]}
         >
           <View>
@@ -238,6 +252,100 @@ function VideoList({ channel, onDone }: { channel: Channel; onDone: () => void }
         </Pressable>
       )}
     />
+  );
+}
+
+/** Vínculo único entre o app e o YouTube da TV. */
+function LinkYouTube({
+  ip,
+  onLinked,
+  onCancel,
+}: {
+  ip?: string;
+  onLinked: (s: Screen) => void;
+  onCancel: () => void;
+}) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState<'auto' | 'code' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const auto = async () => {
+    if (!ip) return setError('Conecte a TV primeiro.');
+    setBusy('auto');
+    setError(null);
+    try {
+      await tv.ensureYouTubeOpen();
+      onLinked(await pairViaDial(ip));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const manual = async () => {
+    setBusy('code');
+    setError(null);
+    try {
+      onLinked(await pairWithCode(code));
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14, paddingBottom: 8 }}>
+      <Text style={styles.linkTitle}>Vincular o YouTube da TV</Text>
+      <Text style={styles.emptyText}>
+        É só uma vez. Depois disso, tocar num vídeo abre ele direto na TV.
+      </Text>
+
+      <Pressable
+        onPress={auto}
+        disabled={!!busy}
+        style={({ pressed }) => [styles.primary, pressed && { opacity: 0.8 }]}
+      >
+        {busy === 'auto' ? (
+          <ActivityIndicator color={c.accentInk} />
+        ) : (
+          <Text style={styles.primaryText}>Vincular automaticamente</Text>
+        )}
+      </Pressable>
+
+      <Text style={[styles.videoMeta, { marginTop: 6 }]}>
+        Se não der certo: no YouTube da TV, vá em Configurações › Vincular com código de TV e digite os 12
+        números aqui.
+      </Text>
+      <View style={styles.addRow}>
+        <TextInput
+          value={code}
+          onChangeText={setCode}
+          placeholder="000 000 000 000"
+          placeholderTextColor={c.faint}
+          keyboardType="number-pad"
+          maxLength={15}
+          style={styles.input}
+        />
+        <Pressable
+          onPress={manual}
+          disabled={!!busy}
+          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.7 }]}
+          accessibilityLabel="Vincular com código"
+        >
+          {busy === 'code' ? (
+            <ActivityIndicator color={c.accentInk} />
+          ) : (
+            <Ionicons name="checkmark" size={24} color={c.accentInk} />
+          )}
+        </Pressable>
+      </View>
+      {error && <Text style={styles.error}>{error}</Text>}
+      <Pressable onPress={onCancel} hitSlop={10} style={{ alignSelf: 'center', marginTop: 4 }}>
+        <Text style={styles.tip}>Voltar para os vídeos</Text>
+      </Pressable>
+    </ScrollView>
   );
 }
 
@@ -299,6 +407,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  linkTitle: { color: c.text, fontSize: 17, fontWeight: '700' },
+  primary: {
+    height: 54,
+    borderRadius: radius.md,
+    backgroundColor: c.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  primaryText: { color: c.accentInk, fontSize: 16, fontWeight: '700' },
   formatBtn: {
     flex: 1,
     height: 44,
