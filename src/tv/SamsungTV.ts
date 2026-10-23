@@ -273,28 +273,28 @@ class SamsungTV {
   }
 
   /**
-   * Abre o YouTube na TV tocando uma playlist (ex.: uploads de um canal).
+   * Abre um vídeo do YouTube na TV.
    * Usa o protocolo DIAL, o mesmo do botão "transmitir" do app do YouTube.
+   * Samsung expõe o DIAL na porta 8080 (modelos mais novos também na 8001).
    */
-  async playYouTube(params: { list?: string; v?: string }) {
+  async playYouTube(videoId: string) {
     const { ip } = this.state;
     if (!ip) throw new Error('Nenhuma TV conectada');
-    const body = Object.entries(params)
-      .filter(([, v]) => v)
-      .map(([k, v]) => `${k}=${encodeURIComponent(v!)}`)
-      .join('&');
-    try {
-      const res = await fetchWithTimeout(`http://${ip}:8080/ws/apps/YouTube`, 4000, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        body,
-      });
-      if (res.ok || res.status === 201) return;
-      throw new Error(String(res.status));
-    } catch {
-      // Plano B: abre o app do YouTube pelo canal de controle.
-      if (!this.launchApp(APPS.youtube, body)) throw new Error('Não consegui abrir o YouTube na TV');
+    const body = `v=${videoId}`;
+    for (const port of [8080, 8001]) {
+      try {
+        const res = await fetchWithTimeout(`http://${ip}:${port}/ws/apps/YouTube`, 4000, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body,
+        });
+        if (res.status === 200 || res.status === 201) return;
+      } catch {
+        // tenta a próxima porta
+      }
     }
+    // Plano B: abre o app do YouTube pelo canal de controle, passando o vídeo.
+    if (!this.launchApp(APPS.youtube, body)) throw new Error('Não consegui abrir o YouTube na TV');
   }
 }
 

@@ -13,7 +13,8 @@ import {
   View,
 } from 'react-native';
 import { loadChannels, saveChannels, type Channel } from '../lib/storage';
-import { resolveChannel, uploadsPlaylist } from '../lib/youtube';
+import { fetchRecentVideos, resolveChannel, thumb, type Video } from '../lib/youtube';
+import { Sheet } from '../components/Sheet';
 import { tv, useTV } from '../tv/SamsungTV';
 import { c, radius } from '../theme';
 
@@ -23,8 +24,7 @@ export function ChannelsScreen() {
   const [input, setInput] = useState('');
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [playing, setPlaying] = useState<string | null>(null);
-
+  
   useEffect(() => {
     loadChannels().then(setChannels);
   }, []);
@@ -53,21 +53,16 @@ export function ChannelsScreen() {
     }
   };
 
-  const play = async (ch: Channel) => {
+  const [open, setOpen] = useState<Channel | null>(null);
+
+  const play = (ch: Channel) => {
     if (status !== 'connected') {
       setError('Conecte a TV primeiro.');
       return;
     }
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-    setPlaying(ch.id);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     setError(null);
-    try {
-      await tv.playYouTube({ list: uploadsPlaylist(ch.id) });
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setTimeout(() => setPlaying(null), 1200);
-    }
+    setOpen(ch);
   };
 
   const remove = (ch: Channel) =>
@@ -85,6 +80,7 @@ export function ChannelsScreen() {
   };
 
   return (
+    <>
     <FlatList
       data={channels}
       keyExtractor={(ch) => ch.id}
@@ -114,7 +110,7 @@ export function ChannelsScreen() {
           </View>
           {error && <Text style={styles.error}>{error}</Text>}
           {channels.length > 0 && (
-            <Text style={styles.tip}>Toque para tocar os vídeos mais recentes na TV. Segure para remover.</Text>
+            <Text style={styles.tip}>Toque para ver os vídeos recentes. Segure para remover.</Text>
           )}
         </View>
       }
@@ -148,16 +144,84 @@ export function ChannelsScreen() {
             </Pressable>
           )}
           <View style={styles.playBtn}>
-            {playing === item.id ? (
-              <ActivityIndicator size="small" color={c.accent} />
-            ) : (
-              <Ionicons name="play" size={18} color={c.accent} />
+            <Ionicons name="play" size={18} color={c.accent} />
+          </View>
+        </Pressable>
+      )}
+    />
+    <Sheet visible={!!open} onClose={() => setOpen(null)} title={open?.title ?? ''}>
+      {open && <VideoList channel={open} onDone={() => setOpen(null)} />}
+    </Sheet>
+    </>
+  );
+}
+
+function VideoList({ channel, onDone }: { channel: Channel; onDone: () => void }) {
+  const [videos, setVideos] = useState<Video[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchRecentVideos(channel.id).then(setVideos, (e) => setError(e.message));
+  }, [channel.id]);
+
+  const send = async (v: Video) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setSending(v.id);
+    setError(null);
+    try {
+      await tv.playYouTube(v.id);
+      onDone();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSending(null);
+    }
+  };
+
+  if (error && !videos) return <Text style={styles.error}>{error}</Text>;
+  if (!videos) return <ActivityIndicator color={c.accent} style={{ marginVertical: 32 }} />;
+
+  return (
+    <FlatList
+      data={videos}
+      keyExtractor={(v) => v.id}
+      ListHeaderComponent={error ? <Text style={[styles.error, { marginBottom: 10 }]}>{error}</Text> : undefined}
+      ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+      renderItem={({ item, index }) => (
+        <Pressable
+          onPress={() => send(item)}
+          style={({ pressed }) => [styles.video, pressed && { opacity: 0.7 }]}
+        >
+          <View>
+            <Image source={{ uri: thumb(item.id) }} style={styles.thumb} />
+            {sending === item.id && (
+              <View style={styles.thumbOverlay}>
+                <ActivityIndicator color="#fff" />
+              </View>
             )}
+          </View>
+          <View style={{ flex: 1, gap: 4 }}>
+            {index === 0 && <Text style={styles.badge}>MAIS RECENTE</Text>}
+            <Text style={styles.videoTitle} numberOfLines={3}>
+              {item.title}
+            </Text>
+            {item.published && <Text style={styles.videoMeta}>{ago(item.published)}</Text>}
           </View>
         </Pressable>
       )}
     />
   );
+}
+
+function ago(iso: string) {
+  const d = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (d < 3600) return `há ${Math.max(1, Math.round(d / 60))} min`;
+  if (d < 86400) return `há ${Math.round(d / 3600)} h`;
+  const days = Math.round(d / 86400);
+  if (days < 30) return `há ${days} ${days === 1 ? 'dia' : 'dias'}`;
+  const months = Math.round(days / 30);
+  return `há ${months} ${months === 1 ? 'mês' : 'meses'}`;
 }
 
 const styles = StyleSheet.create({
@@ -199,6 +263,18 @@ const styles = StyleSheet.create({
   },
   avatar: { width: 48, height: 48, borderRadius: 24 },
   title: { color: c.text, fontSize: 16, fontWeight: '600', flex: 1 },
+  video: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  thumb: { width: 140, height: 79, borderRadius: 10, backgroundColor: c.surfaceHi },
+  thumbOverlay: {
+    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badge: { color: c.accent, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  videoTitle: { color: c.text, fontSize: 14, fontWeight: '600', lineHeight: 19 },
+  videoMeta: { color: c.muted, fontSize: 12 },
   playBtn: {
     width: 40,
     height: 40,

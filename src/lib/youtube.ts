@@ -63,3 +63,35 @@ export async function resolveChannel(input: string): Promise<Channel> {
 
 /** Playlist de uploads do canal: UCxxxx vira UUxxxx. Toca do vídeo mais recente. */
 export const uploadsPlaylist = (channelId: string) => `UU${channelId.slice(2)}`;
+
+export type Video = { id: string; title: string; published?: string };
+
+/** Vídeos mais recentes do canal. Usa o feed RSS e, se falhar, a página de vídeos. */
+export async function fetchRecentVideos(channelId: string): Promise<Video[]> {
+  try {
+    const xml = await get(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
+    const videos = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)]
+      .map(([, e]) => ({
+        id: e.match(/<yt:videoId>([\w-]{11})<\/yt:videoId>/)?.[1] ?? '',
+        title: decodeEntities(e.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? 'Vídeo'),
+        published: e.match(/<published>([^<]+)<\/published>/)?.[1],
+      }))
+      .filter((v) => v.id);
+    if (videos.length) return videos;
+  } catch {
+    // segue para o plano B
+  }
+  const html = await get(`https://www.youtube.com/channel/${channelId}/videos`);
+  const seen = new Set<string>();
+  const out: Video[] = [];
+  for (const m of html.matchAll(/"videoId":"([\w-]{11})"[\s\S]{0,400}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/g)) {
+    if (seen.has(m[1])) continue;
+    seen.add(m[1]);
+    out.push({ id: m[1], title: JSON.parse(`"${m[2]}"`) });
+    if (out.length >= 15) break;
+  }
+  if (!out.length) throw new Error('Não consegui buscar os vídeos desse canal.');
+  return out;
+}
+
+export const thumb = (videoId: string) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
