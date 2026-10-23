@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Key, Row } from '../components/Key';
 import { Sheet } from '../components/Sheet';
-import { APPS, tv, type InstalledApp } from '../tv/SamsungTV';
+import { tv, type InstalledApp } from '../tv/SamsungTV';
 import { c, radius } from '../theme';
 
 const I = ({ name, size = 22, color = c.text }: { name: any; size?: number; color?: string }) => (
@@ -82,9 +82,9 @@ export function RemoteScreen() {
 
       <Text style={styles.section}>Apps</Text>
       <Row>
-        <Key onPress={() => tv.launchApp(APPS.netflix)} label="Netflix" />
-        <Key onPress={() => tv.launchApp(APPS.prime)} label="Prime" />
-        <Key onPress={() => tv.launchApp(APPS.youtube)} label="YouTube" />
+        <Key onPress={() => tv.openApp('netflix').catch(() => {})} label="Netflix" />
+        <Key onPress={() => tv.openApp('prime').catch(() => {})} label="Prime" />
+        <Key onPress={() => tv.openApp('youtube').catch(() => {})} label="YouTube" />
         <Key onPress={() => setAppsOpen(true)} a11y="Todos os apps">
           <I name="apps-outline" size={20} />
         </Key>
@@ -181,7 +181,7 @@ function AppsList({ onPicked }: { onPicked: () => void }) {
         <Pressable
           style={({ pressed }) => [styles.appRow, pressed && { opacity: 0.6 }]}
           onPress={() => {
-            tv.launchApp(item.appId);
+            tv.launchById(item.appId).catch(() => {});
             onPicked();
           }}
         >
