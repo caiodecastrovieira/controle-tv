@@ -182,11 +182,38 @@ function VideoList({ channel, onDone }: { channel: Channel; onDone: () => void }
   if (error && !videos) return <Text style={styles.error}>{error}</Text>;
   if (!videos) return <ActivityIndicator color={c.accent} style={{ marginVertical: 32 }} />;
 
+  const openChannel = async (format: 1 | 2 | 3) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setError(null);
+    try {
+      await tv.openYouTubeChannel(channel.id, format);
+    } catch (e: any) {
+      setError(e.message);
+    }
+  };
+
   return (
     <FlatList
       data={videos}
       keyExtractor={(v) => v.id}
-      ListHeaderComponent={error ? <Text style={[styles.error, { marginBottom: 10 }]}>{error}</Text> : undefined}
+      ListHeaderComponent={
+        <View style={{ gap: 10, marginBottom: 16 }}>
+          <Text style={styles.videoMeta}>Abrir a página do canal na TV (teste: qual formato funciona?)</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {([1, 2, 3] as const).map((f) => (
+              <Pressable
+                key={f}
+                onPress={() => openChannel(f)}
+                style={({ pressed }) => [styles.formatBtn, pressed && { opacity: 0.7 }]}
+              >
+                <Text style={styles.formatText}>Formato {f}</Text>
+              </Pressable>
+            ))}
+          </View>
+          {error && <Text style={styles.error}>{error}</Text>}
+          <Text style={[styles.videoMeta, { marginTop: 6 }]}>Ou escolha um vídeo:</Text>
+        </View>
+      }
       ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
       renderItem={({ item, index }) => (
         <Pressable
@@ -272,6 +299,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  formatBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: c.surface,
+    borderWidth: 1,
+    borderColor: c.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  formatText: { color: c.accent, fontSize: 13, fontWeight: '700' },
   badge: { color: c.accent, fontSize: 10, fontWeight: '800', letterSpacing: 1 },
   videoTitle: { color: c.text, fontSize: 14, fontWeight: '600', lineHeight: 19 },
   videoMeta: { color: c.muted, fontSize: 12 },
