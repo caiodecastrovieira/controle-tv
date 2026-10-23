@@ -1,14 +1,18 @@
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Key, Row } from '../components/Key';
 import { Sheet } from '../components/Sheet';
-import { tv, type InstalledApp } from '../tv/SamsungTV';
+import { SHORTCUTS, tv, type AppKey, type InstalledApp } from '../tv/SamsungTV';
 import { c, radius } from '../theme';
 
 const I = ({ name, size = 22, color = c.text }: { name: any; size?: number; color?: string }) => (
   <Ionicons name={name} size={size} color={color} />
 );
+
+function openApp(k: AppKey) {
+  tv.openApp(k).catch((e) => Alert.alert(SHORTCUTS[k].label, e?.message ?? 'Não consegui abrir o app.'));
+}
 
 export function RemoteScreen() {
   const [numpad, setNumpad] = useState(false);
@@ -81,14 +85,25 @@ export function RemoteScreen() {
       </Row>
 
       <Text style={styles.section}>Apps</Text>
-      <Row>
-        <Key onPress={() => tv.openApp('netflix').catch(() => {})} label="Netflix" />
-        <Key onPress={() => tv.openApp('prime').catch(() => {})} label="Prime" />
-        <Key onPress={() => tv.openApp('youtube').catch(() => {})} label="YouTube" />
-        <Key onPress={() => setAppsOpen(true)} a11y="Todos os apps">
-          <I name="apps-outline" size={20} />
-        </Key>
-      </Row>
+      {[
+        ['globoplay', 'netflix', 'disney'],
+        ['spotify', 'prime', 'appletv'],
+        ['youtube', 'audible'],
+      ].map((row, i) => (
+        <Row key={i}>
+          {(row as AppKey[]).map((k) => (
+            <Key key={k} onPress={() => openApp(k)} label={SHORTCUTS[k].label} style={styles.appKey} />
+          ))}
+          {i === 2 && (
+            <Key onPress={() => setAppsOpen(true)} a11y="Todos os apps" style={styles.appKey}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <I name="apps-outline" size={18} />
+                <Text style={styles.allApps}>Todos</Text>
+              </View>
+            </Key>
+          )}
+        </Row>
+      ))}
 
       <Sheet visible={numpad} onClose={() => setNumpad(false)} title="Números e cores">
         <Numpad />
@@ -240,6 +255,8 @@ const styles = StyleSheet.create({
     backgroundColor: c.surfaceHi,
   },
   section: { color: c.muted, fontSize: 12, fontWeight: '700', letterSpacing: 1.2, marginTop: 8, textTransform: 'uppercase' },
+  appKey: { height: 50 },
+  allApps: { color: c.text, fontSize: 15, fontWeight: '600' },
   colorBar: { width: 28, height: 6, borderRadius: 3 },
   muted: { color: c.muted, fontSize: 14, marginVertical: 16 },
   appRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },

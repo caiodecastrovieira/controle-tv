@@ -19,53 +19,44 @@ export type TVState = {
 
 export type InstalledApp = { appId: string; name: string };
 
-export const APPS = {
-  netflix: '3201907018807',
-  prime: '3201910019365',
-  youtube: '111299001912',
+/** Atalhos da tela Controle. ids: IDs conhecidos no Tizen; o primeiro que existir na TV é usado. */
+export const SHORTCUTS = {
+  globoplay: { label: 'Globoplay', match: /globo ?play/i, ids: ['3201908019022', '3201807016564', '3201609010734'] },
+  netflix: { label: 'Netflix', match: /^netflix$/i, ids: ['3201907018807', '11101200001', 'RN1MCdNq8t.Netflix'] },
+  disney: { label: 'Disney+', match: /disney/i, ids: ['3201901017640'] },
+  spotify: { label: 'Spotify', match: /spotify/i, ids: ['3201606009684'] },
+  prime: {
+    label: 'Prime Video',
+    match: /prime video|amazon/i,
+    ids: ['3201910019365', '3201512006785', 'org.tizen.ignition'],
+  },
+  appletv: { label: 'Apple TV', match: /apple ?tv/i, ids: ['3201807016597'] },
+  youtube: { label: 'YouTube', match: /^youtube$/i, ids: ['111299001912', '9Ur5IzDKqV.TizenYouTube'] },
+  audible: { label: 'Audible', match: /audible/i, ids: [] as string[] },
 } as const;
 
-export type AppKey = keyof typeof APPS;
+export type AppKey = keyof typeof SHORTCUTS;
 
-/** IDs conhecidos por modelo/ano. O primeiro que existir na TV é usado. */
-const APP_CANDIDATES: Record<AppKey, string[]> = {
-  netflix: ['3201907018807', '11101200001', 'RN1MCdNq8t.Netflix', '3201506003488'],
-  prime: ['3201910019365', '3201512006785', 'org.tizen.ignition', 'evKhCgZelL.AmazonIgnitionLauncher2'],
-  youtube: ['111299001912', '9Ur5IzDKqV.TizenYouTube', '3201502001815'],
-};
-
-/** Apps populares e seus IDs conhecidos no Tizen. Usado quando a TV não informa a lista. */
-const APP_CATALOG: { name: string; ids: string[] }[] = [
-  { name: 'Netflix', ids: APP_CANDIDATES_NETFLIX() },
-  { name: 'YouTube', ids: ['111299001912', '9Ur5IzDKqV.TizenYouTube'] },
-  { name: 'Prime Video', ids: ['3201910019365', '3201512006785', 'org.tizen.ignition'] },
-  { name: 'Disney+', ids: ['3201901017640'] },
+/** Apps mostrados em "Todos os apps" quando a TV não informa a lista. */
+const APP_CATALOG: { name: string; ids: readonly string[] }[] = [
+  ...Object.values(SHORTCUTS)
+    .filter((s) => s.ids.length)
+    .map((s) => ({ name: s.label, ids: s.ids })),
   { name: 'Max', ids: ['3202301029760', '3201601007230'] },
-  { name: 'Globoplay', ids: ['3201908019041', '3201807016564', '3201609010734'] },
-  { name: 'Apple TV', ids: ['3201807016597'] },
+  { name: 'Apple Music', ids: ['3201908019041'] },
   { name: 'Paramount+', ids: ['3201710014981'] },
   { name: 'Pluto TV', ids: ['3201808016802'] },
-  { name: 'Spotify', ids: ['3201606009684'] },
-  { name: 'Deezer', ids: ['3201608010191'] },
   { name: 'YouTube Kids', ids: ['3201611010983'] },
+  { name: 'Deezer', ids: ['121299000101', '3201608010191'] },
+  { name: 'Telecine', ids: ['3201604009182'] },
+  { name: 'DAZN', ids: ['3201806016390'] },
   { name: 'Crunchyroll', ids: ['3201807016566'] },
-  { name: 'Twitch', ids: ['3202203026841'] },
   { name: 'Plex', ids: ['3201512006963'] },
   { name: 'Tubi', ids: ['3201504001965'] },
   { name: 'Steam Link', ids: ['3201702011851'] },
-  { name: 'Navegador', ids: ['org.tizen.browser', '3201907018784'] },
+  { name: 'Internet', ids: ['3202010022079', 'org.tizen.browser'] },
+  { name: 'Galeria', ids: ['3201710015037'] },
 ];
-
-function APP_CANDIDATES_NETFLIX() {
-  return ['3201907018807', '11101200001', 'RN1MCdNq8t.Netflix'];
-}
-
-/** Como o app aparece na lista de instalados da TV. */
-const APP_NAMES: Record<AppKey, RegExp> = {
-  netflix: /^netflix$/i,
-  prime: /prime video|amazon/i,
-  youtube: /^youtube$/i,
-};
 
 const REMOTE_NAME = toBase64('Controle do Caio');
 const RECONNECT_MS = 3000;
@@ -309,18 +300,21 @@ class SamsungTV {
     // 1. Pela lista de apps instalados (mais confiável).
     try {
       const apps = await this.askInstalledApps();
-      const hit = apps.find((a) => APP_NAMES[key].test(a.name.trim()));
+      const hit = apps.find((a) => SHORTCUTS[key].match.test(a.name.trim()));
       if (hit) return (this.resolvedApps[key] = hit.appId);
     } catch {}
 
     // 2. Perguntando à TV se cada ID conhecido existe.
-    for (const id of APP_CANDIDATES[key]) {
+    for (const id of SHORTCUTS[key].ids) {
       try {
         const res = await fetchWithTimeout(`http://${ip}:8001/api/v2/applications/${id}`, 2000);
         if (res.ok) return (this.resolvedApps[key] = id);
       } catch {}
     }
-    return APPS[key];
+    if (!SHORTCUTS[key].ids.length) {
+      throw new Error(`Não encontrei o ${SHORTCUTS[key].label} nesta TV.`);
+    }
+    return SHORTCUTS[key].ids[0];
   }
 
   /** Abre Netflix, Prime ou YouTube, achando o ID certo para esta TV. */
